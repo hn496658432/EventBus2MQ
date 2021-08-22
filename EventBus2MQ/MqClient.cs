@@ -1,7 +1,7 @@
-﻿using EventBus2MQ.Receivers;
-using RabbitMQ.Client;
+﻿using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -9,87 +9,132 @@ using System.Threading.Tasks;
 
 namespace EventBus2MQ
 {
+    /***************************************************************************
+     *                      RabbitMq 发布、订阅 Demo
+     * -------------------------------------------------------------------------
+     * 
+     * 参照官方文档建议使用 Connection 和 Channel，尽量复用这些资源
+     * 
+     * 
+     * Auth:kl
+     * Date:2021-08-23
+     ***************************************************************************/
     public class MqClient
     {
-        static readonly IConnection _conn = MqClientConfig.GetConnection();
-        public static Task StartupAsync()
-        {            
-            IModel channel = _conn.CreateModel();
+        // 连接创建效率不高，为更好的复用，减少资源消耗，在全局声明连接
+        IConnection? _connection;
+        ICollection<ISubscriber>? _subscribers;
 
-            // 控制台 "Ctrl + C" 和程序退出调用 Shutdown
-            // Console.CancelKeyPress += async (s, e) => await ShutdownAsync();
+        /// <summary>
+        /// 启动客户端
+        /// </summary>
+        public void Startup()
+        {
+            Console.WriteLine("客户端初始化...");
+            _connection = GetConnection();
+            // 程序退出时调用关闭连接
+            Console.CancelKeyPress += (sender, e) =>Shutdown();
+            AppDomain.CurrentDomain.ProcessExit += (sender, e) => Shutdown();
 
-            AppDomain.CurrentDomain.ProcessExit += async (s, e) => await ShutdownAsync();
+            // 加载订阅者
+            _subscribers?.ToList().ForEach(SubscriberActive);
+        }
 
-
-            List<ConsumerDefualt> consumers = new List<ConsumerDefualt>()
+        /// <summary>
+        /// 关闭客户端
+        /// </summary>
+        public void Shutdown()
+        {
+            if (_connection != null)
             {
-                new TestReceiverA("amq.direct","test1"),
-                new TestReceiverB("amq.fanout","test2")
-            };
-            
+                Console.WriteLine("客户端即将退出...");
+                lock (_connection)
+                {
+                    _connection.Close();
+                    _connection.Dispose();
+                }
+            }
+        }
 
-            // 创建队列绑定
-            consumers.ForEach(channel.AddQueueBind);
-
-            // 为消费者加订阅事件
-            consumers.ForEach(c =>
-            {
-               // using var channel_x = _conn.CreateModel();
-                Console.WriteLine("开始监听:{0}" ,c.EventName);
-                channel.BasicQos(0,5,false);
-                var driver = new EventingBasicConsumer(channel);
-                driver.Received += new EventHandler<BasicDeliverEventArgs>(async (sender, args) =>
-                    await ConsumerWorking(channel, c, sender, args)
-                );
-            });
-
-
+        /// <summary>
+        /// 添加订阅者（多个）
+        /// </summary>
+        /// <param name="subscribers"></param>
+        /// <returns></returns>
+        public Task AddSubscriber(params ISubscriber[] subscribers)
+        {
+            _subscribers = _subscribers ?? new List<ISubscriber>();
+            _subscribers.ToList().AddRange(subscribers);
 
             return Task.CompletedTask;
         }
 
-        public async static Task ConsumerWorking(IModel channel, IConsumer<string> consumer, object sender, BasicDeliverEventArgs args)
+        /// <summary>
+        /// 添加订阅者（单个）
+        /// </summary>
+        /// <param name="subscriber"></param>
+        /// <returns></returns>
+        public Task AddSubscriber(ISubscriber subscriber)
         {
-            string message = string.Empty;
+            _subscribers = _subscribers ?? new List<ISubscriber>();
+            _subscribers.Add(subscriber);
 
+            return Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// 为订阅者添加接收消息事件
+        /// </summary>
+        /// <param name="subscriber"></param>
+        private void SubscriberActive(ISubscriber subscriber)
+        {
+            IModel? channel;
             try
             {
-                var body = args.Body.ToArray();
-                message = Encoding.UTF8.GetString(body);
-                await consumer.ProcessData(message);
-                channel.BasicAck(args.DeliveryTag, false);
+                channel = _connection?.CreateModel();
+                Console.WriteLine("开始监听：{0}", subscriber.QueueName);
+                channel.QueueDeclare(subscriber.QueueName, true, false, false);
+                channel.QueueBind(subscriber.QueueName, subscriber.EventName,"");
+                var listener = new AsyncEventingBasicConsumer(channel);
+                listener.Received += (sender, args) => ListenerReceived(subscriber, sender, args);
+                channel.BasicConsume(subscriber.QueueName, true, listener);
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                if (args != null)
-                {
-                    if (consumer.IsDiscardErrorData)
-                    {
-                        channel.BasicAck(args.DeliveryTag, false);
-                    }
-                    else
-                    {
-                        channel.BasicNack(args.DeliveryTag, false, true);
-                    }
-                }
-                await consumer.ErrorHandler(ex, message);
+                throw;
             }
+            //return Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// 通用消息处理
+        /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="eventArgs"></param>
+        /// <returns></returns>
+        public static async Task ListenerReceived(ISubscriber subscriber, object sender, BasicDeliverEventArgs eventArgs)
+        {            
+            var body = Encoding.UTF8.GetString(eventArgs.Body.ToArray());
+            await subscriber.ProcessData(body);
 
         }
 
-        public static Task ShutdownAsync()
+        /// <summary>
+        /// 获取连接
+        /// </summary>
+        private IConnection GetConnection()
         {
-            Console.WriteLine("RabbitMq 进程退出.");
-            lock (_conn)
+            var factory = new ConnectionFactory
             {
-                if (_conn.IsOpen)
-                {
-                    _conn.Close();
-                }
-            }
-
-            return Task.CompletedTask;
+                HostName = "192.168.137.50",
+                VirtualHost = "/",
+                UserName = "guest",
+                Password = "guest",
+                DispatchConsumersAsync = true       // 启用异步订阅支持
+            };
+            return factory.CreateConnection();
         }
+
+
     }
 }
