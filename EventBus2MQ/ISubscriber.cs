@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 
 namespace EventBus2MQ
 {
+    // 订阅者接口
     public interface ISubscriber
     {
 
