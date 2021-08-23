@@ -7,11 +7,11 @@ namespace EventBus2MQ.SubscriberTest
     {
         static async Task Main(string[] args)
         {
-            MqClient mqClient = new MqClient();
+            MqClient mqClient = new();
 
-            TestSubscriberA testSubscriberA = new TestSubscriberA();
-
-            await mqClient.AddSubscriber(testSubscriberA);
+            TestSubscriberA testSubscriberA = new();
+            TestSubscriberB testSubscriberB = new();
+            await mqClient.AddSubscriber(testSubscriberA,testSubscriberB);
            
             mqClient.Startup();
 

@@ -1,4 +1,5 @@
-﻿using RabbitMQ.Client;
+﻿using Newtonsoft.Json;
+using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 using System;
 using System.Collections;
@@ -30,13 +31,13 @@ namespace EventBus2MQ
         /// </summary>
         public void Startup()
         {
-            Console.WriteLine("客户端初始化...");
+            Console.WriteLine("MQ客户端已启动.");
             _connection = GetConnection();
             // 程序退出时调用关闭连接
-            Console.CancelKeyPress += (sender, e) =>Shutdown();
+            Console.CancelKeyPress += (sender, e) => Shutdown();
             AppDomain.CurrentDomain.ProcessExit += (sender, e) => Shutdown();
 
-            // 加载订阅者
+            // 将所有订阅者激活
             _subscribers?.ToList().ForEach(SubscriberActive);
         }
 
@@ -63,8 +64,8 @@ namespace EventBus2MQ
         /// <returns></returns>
         public Task AddSubscriber(params ISubscriber[] subscribers)
         {
-            _subscribers = _subscribers ?? new List<ISubscriber>();
-            _subscribers.ToList().AddRange(subscribers);
+            _subscribers ??= new List<ISubscriber>();
+            subscribers.ToList().ForEach(_subscribers.Add);
 
             return Task.CompletedTask;
         }
@@ -76,7 +77,7 @@ namespace EventBus2MQ
         /// <returns></returns>
         public Task AddSubscriber(ISubscriber subscriber)
         {
-            _subscribers = _subscribers ?? new List<ISubscriber>();
+            _subscribers ??= new List<ISubscriber>();
             _subscribers.Add(subscriber);
 
             return Task.CompletedTask;
@@ -92,31 +93,64 @@ namespace EventBus2MQ
             try
             {
                 channel = _connection?.CreateModel();
-                Console.WriteLine("开始监听：{0}", subscriber.QueueName);
+                Console.WriteLine("{0}开始订阅：{1}", subscriber.QueueName,subscriber.EventName);
                 channel.QueueDeclare(subscriber.QueueName, true, false, false);
-                channel.QueueBind(subscriber.QueueName, subscriber.EventName,"");
+                channel.QueueBind(subscriber.QueueName, subscriber.EventName, "");
                 var listener = new AsyncEventingBasicConsumer(channel);
-                listener.Received += (sender, args) => ListenerReceived(subscriber, sender, args);
-                channel.BasicConsume(subscriber.QueueName, true, listener);
+                listener.Received += (sender, args) => ListenerReceived(channel,subscriber, sender, args);
+                channel.BasicConsume(subscriber.QueueName, false, listener);
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                throw;
+                Console.WriteLine("{0}订阅{1}失败:{2}\r\n{3}",
+                    subscriber.QueueName,
+                    subscriber.EventName,
+                    ex.Message,
+                    ex.StackTrace);
             }
             //return Task.CompletedTask;
         }
 
         /// <summary>
-        /// 通用消息处理
+        /// [响应订阅者接受消息事件]
+        /// 调用订阅者处理业务方法，在拦截业务方法错误时，调用错误处理方法
         /// </summary>
         /// <param name="sender"></param>
         /// <param name="eventArgs"></param>
         /// <returns></returns>
-        public static async Task ListenerReceived(ISubscriber subscriber, object sender, BasicDeliverEventArgs eventArgs)
-        {            
-            var body = Encoding.UTF8.GetString(eventArgs.Body.ToArray());
-            await subscriber.ProcessData(body);
-
+        public static async Task ListenerReceived(
+            IModel? channel,
+            ISubscriber subscriber, 
+            object sender, 
+            BasicDeliverEventArgs eventArgs)
+        {
+            string _message = string.Empty;
+            try
+            {
+                _message = Encoding.UTF8.GetString(eventArgs.Body.ToArray());
+                subscriber.ProcessData(_message).ContinueWith(task=> {
+                    if (task.IsCompleted)
+                    {
+                        channel.BasicAck(eventArgs.DeliveryTag, false);
+                    }else
+                    {
+                        channel.BasicReject(eventArgs.DeliveryTag, true);
+                    }
+                });
+                
+            }
+            catch (Exception ex)
+            {
+                if (subscriber.IsDiscardErrorData)
+                {
+                    channel.BasicAck(eventArgs.DeliveryTag, false);
+                }
+                else
+                {
+                    channel.BasicReject(eventArgs.DeliveryTag, false);
+                }
+                await subscriber.ErrorHandler(ex,_message);
+            }
         }
 
         /// <summary>
@@ -130,11 +164,10 @@ namespace EventBus2MQ
                 VirtualHost = "/",
                 UserName = "guest",
                 Password = "guest",
+                Port = 5672,
                 DispatchConsumersAsync = true       // 启用异步订阅支持
             };
             return factory.CreateConnection();
         }
-
-
     }
 }

@@ -6,12 +6,12 @@ using System.Threading.Tasks;
 
 namespace EventBus2MQ.SubscriberTest
 {
-    public class TestSubscriberA : ISubscriber
+    public class TestSubscriberB : ISubscriber
     {
         /// <summary>
         /// 消费队列
         /// </summary>
-        public string QueueName => "test1";
+        public string QueueName => "test2";
         /// <summary>
         /// 订阅事件
         /// </summary>
@@ -21,7 +21,7 @@ namespace EventBus2MQ.SubscriberTest
 
         public Task ErrorHandler(Exception ex, string Message)
         {
-            Console.WriteLine("{0}队列发生异常:{1}\r\nBody:{2}",QueueName,ex.Message,Message);
+            Console.WriteLine("Error:{0}\r\nBody:{1}",ex.Message,Message);
 
             return Task.CompletedTask;
         }
@@ -31,14 +31,13 @@ namespace EventBus2MQ.SubscriberTest
         /// </summary>
         /// <param name="Message"></param>
         /// <returns></returns>
-        public async Task ProcessData(string Message)
+        public Task ProcessData(string Message)
         {
             Console.WriteLine("{0}收到消息：{1}", QueueName, Message);
-
-            await Task.Delay(1000 * 60 * 30);
-#if DEBUG
-            throw new Exception("预设业务处理错误！");
-#endif
+//#if DEBUG
+//            throw new Exception("预设业务处理错误！");
+//#endif
+            return Task.CompletedTask;
         }
     }
 }
