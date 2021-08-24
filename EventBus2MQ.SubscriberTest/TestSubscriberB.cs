@@ -19,11 +19,13 @@ namespace EventBus2MQ.SubscriberTest
 
         public bool IsDiscardErrorData => false;
 
-        public Task ErrorHandler(Exception ex, string Message)
+        public int TrySize { get; set; } = 3;
+
+        public async Task<bool> ErrorHandler(Exception ex, string Message)
         {
             Console.WriteLine("Error:{0}\r\nBody:{1}",ex.Message,Message);
 
-            return Task.CompletedTask;
+            return true;
         }
 
         /// <summary>

@@ -92,12 +92,13 @@ namespace EventBus2MQ
             IModel? channel;
             try
             {
-                channel = _connection?.CreateModel();
-                Console.WriteLine("{0}开始订阅：{1}", subscriber.QueueName,subscriber.EventName);
+                channel = _connection?.CreateModel() ?? throw new ArgumentNullException(nameof(channel));
+                channel.BasicQos(0, 5, false);
+                Console.WriteLine("{0}开始订阅：{1}", subscriber.QueueName, subscriber.EventName);
                 channel.QueueDeclare(subscriber.QueueName, true, false, false);
                 channel.QueueBind(subscriber.QueueName, subscriber.EventName, "");
                 var listener = new AsyncEventingBasicConsumer(channel);
-                listener.Received += (sender, args) => ListenerReceived(channel,subscriber, sender, args);
+                listener.Received += (sender, args) => ListenerReceived(channel, subscriber, sender, args);
                 channel.BasicConsume(subscriber.QueueName, false, listener);
             }
             catch (Exception ex)
@@ -120,36 +121,61 @@ namespace EventBus2MQ
         /// <returns></returns>
         public static async Task ListenerReceived(
             IModel? channel,
-            ISubscriber subscriber, 
-            object sender, 
+            ISubscriber subscriber,
+            object sender,
             BasicDeliverEventArgs eventArgs)
         {
             string _message = string.Empty;
             try
             {
                 _message = Encoding.UTF8.GetString(eventArgs.Body.ToArray());
-                subscriber.ProcessData(_message).ContinueWith(task=> {
-                    if (task.IsCompleted)
+#pragma warning disable CS4014
+                subscriber.ProcessData(_message).ContinueWith(async task =>
+                {
+                    if (channel == null)
                     {
-                        channel.BasicAck(eventArgs.DeliveryTag, false);
-                    }else
-                    {
-                        channel.BasicReject(eventArgs.DeliveryTag, true);
+                        throw new ArgumentNullException(nameof(channel));
                     }
+
+                    if (task.IsCompleted && task.Exception == null)
+                    {
+                        Console.WriteLine("{0}业务处理完成！", subscriber.QueueName);
+                        channel.BasicAck(eventArgs.DeliveryTag, false);
+                    }
+                    else if (task.Exception != null)
+                    {
+
+                        if (subscriber.IsDiscardErrorData)
+                        {
+                            Console.WriteLine("{0}业务处理失败！消息已丢弃！", subscriber.QueueName);
+                            channel.BasicAck(eventArgs.DeliveryTag, false);
+                        }
+                        else
+                        {
+                            // 业务处理发生错误，并设置了不丢弃错误消息，延迟重试处理！
+                            for (int i = 0; i < subscriber.TrySize; i++)
+                            {
+                                await Task.Delay(1000 * 1 * i);
+                                Console.WriteLine("{0}业务处理失败！消息将尝试重新处理[{1}]！", subscriber.QueueName, i + 1);
+                                var status = await subscriber.ErrorHandler(task.Exception, _message);
+                                if (status)
+                                {
+                                    channel.BasicAck(eventArgs.DeliveryTag, false);
+                                    break;
+                                }
+                            }
+                            channel.BasicAck(eventArgs.DeliveryTag, false);
+                            Console.WriteLine("业务处理重试了{0}次,消息已被丢弃",subscriber.TrySize);
+                        }
+                    }
+
                 });
-                
+#pragma warning restore
+
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                if (subscriber.IsDiscardErrorData)
-                {
-                    channel.BasicAck(eventArgs.DeliveryTag, false);
-                }
-                else
-                {
-                    channel.BasicReject(eventArgs.DeliveryTag, false);
-                }
-                await subscriber.ErrorHandler(ex,_message);
+                // 事件回调异常
             }
         }
 

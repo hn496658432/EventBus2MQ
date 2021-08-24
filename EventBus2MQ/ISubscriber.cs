@@ -20,6 +20,7 @@ namespace EventBus2MQ
         /// 是否丢弃处理错误消息
         /// </summary>
         bool IsDiscardErrorData { get; }
+        int TrySize { get; set; }
         /// <summary>
         /// 处理订阅消息
         /// </summary>
@@ -32,6 +33,6 @@ namespace EventBus2MQ
         /// <param name="ex"></param>
         /// <param name="Message"></param>
         /// <returns></returns>
-        Task ErrorHandler(Exception ex, string Message);
+        Task<bool> ErrorHandler(Exception ex, string Message);
     }
 }
